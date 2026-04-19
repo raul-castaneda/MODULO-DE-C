@@ -1,85 +1,131 @@
 /*
  * NombreProgra.c
  *
- * Created: 30/03/2026
- * Author: Raúl Castañéda	
- * Description: Contador de 8 bits con implementación de botones de incremento y decremento 
+ * Created: 13/04/2026
+ * Author: Raúl Castañeda 24085
+ * Description: Control de servo motor por medio de un potenciómetro 
  */
 /****************************************/
 // Encabezado (Libraries)
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include "PWM1/PWM1.h"
+#include "PWM_2/PWM_2.h"
+#include "PWM_0/PWM_0.h"
 
-#define BOTON_INC (1 << PC3)  // Botón de incremento en PC3
-#define BOTON_DEC (1<< PC2) // Botón de decremento en PC2
-#define LOW_NIBBLE 0x3F // LOW_NIBBLE del contador y parte del HIGH en PB0->PB5 
-#define HIGH_NIBBLE 0x03 // Parte del HIGH_NIBBLE del contador en PC0->PC1
+// Variables globales // 
+uint16_t tiempo_us = 1500;
+volatile uint8_t ADC_valor = 0;
+volatile uint8_t pulso_ms = 0;
+volatile uint8_t contador_ms = 0;
 
-volatile uint8_t contador = 0; 
 /****************************************/
 // Function prototypes
-void setup(void); 
-void mostrar_conteo(uint8_t valor); 
-
+void init_ADC(void);
 /****************************************/
 // Main Function
 
+
 void setup()
-{
-	// Configuración del clock a 1MHz
-	CLKPR = (1 << CLKPCE);
-	CLKPR = (1 << CLKPS2);
-	
-	// Configuración de puertos
-	DDRB |= LOW_NIBBLE; // PBO->PB5 como salidas
-	DDRC |= HIGH_NIBBLE; // PC0->PC1 como salidas
-	DDRC &= ~(BOTON_INC | BOTON_DEC); // PC2->PC3 como entradas
-	PORTC |= (BOTON_INC | BOTON_DEC);
-	
-	
-	// Configuración de ISR pinchange en el PORTC
-	PCICR |= (1<<PCIE1);
-	// Habiltamos la interrupción solo en PC2 y PC3
-	PCMSK1 |= (BOTON_INC | BOTON_DEC);
-	
-	sei(); // Activación de interrupciones globales
+{		
+		DDRB |= (1<<DDB1);
+		
 }
-
-void mostrar_conteo(uint8_t valor)
-{
-	PORTB = (PORTB & ~LOW_NIBBLE) | (valor & LOW_NIBBLE);
-	PORTC = (PORTC & ~HIGH_NIBBLE) | ((valor >> 6) & HIGH_NIBBLE);
-}
-//**********************//
-
 int main(void)
 {
+	// Iniciamos todas las configuraciones del ADC, timer0 y muestreo del contador de 8 bits.
+	
+	cli();
 	setup();
-	mostrar_conteo(contador);
+	setup_2();
+	setup_timer0();
+	init_timer0();
+	init_timer1();
+	init_TIMER2(); 
+	init_ADC();
+	PWM_set(tiempo_us);
+	sei();
 	
 	while (1)
 	{
+		
 	}
 	
 	return 0;
 }
-
 /****************************************/
 // NON-Interrupt subroutines
+
+void init_ADC(void)
+{
+	// Configuración de ISR por ADC en pin A7
+	ADMUX |= (1 << REFS0);
+	ADMUX &= ~((1<<MUX3) | (1<<MUX2) | (1<<MUX1) | (1<<MUX0));
+	ADMUX |= ((1 << MUX2)|(1 << MUX1) | (1<< MUX0)); // Seleccionamos canal donde estara el POT en este caso es en el ADC7
+	//ADMUX |= ((1<<MUX2) | (1<<MUX1)); // Seleccionamos el canal donde estara el pot para el servo por timer2 que en este caso esl ADC6 
+	ADCSRA |= (1 << ADEN); // Habilitamos el ADC
+	ADCSRA |= (1 << ADIE); // Habilitamos interrupciones por ADC
+	// Configuramos la justificación a la izquierda
+	ADMUX |= (1 << ADLAR);
+	ADCSRA |= (1 << ADSC); // Activamos la conversión inicial, luego la que esta en la ISR se encarga de las
+	ADCSRA |= (1<<ADPS2) | (1<<ADPS1) | (1<<ADPS0);
+}
+
+
+
 
 /****************************************/
 // Interrupt routines
 
-ISR (PCINT1_vect)
+ISR (ADC_vect)
 {
-	if (!(PINC & BOTON_INC)) // Si PC3 = 0 (presionado) el contador incrementa  
+	
+	ADC_valor = ADCH;
+	uint8_t canal = ADMUX & 0x0F; 
+	
+	if (canal == 7)
 	{
-		contador ++; 
-		mostrar_conteo(contador); 
+		// Esto es para el ADC7
+		uint16_t tiempo_us;
+		
+		tiempo_us = 500 + ((uint32_t)ADC_valor * 2000)/255;
+		PWM_set(tiempo_us);
+		
+		ADMUX = (ADMUX & 0xF0) | 0x06; 
 	}
-	else if (!(PINC & BOTON_DEC)) // Si PC2 = 0 (presionado) el contador decrementa 
+	
+	else if (canal == 6)
 	{
-		contador --; 
-		mostrar_conteo(contador);
+		// Mapeo por el ADC6
+		uint8_t OCR2A_valor = OCR2A_valormin + ((uint16_t) ADC_valor * 32) / 255 ;  // Operación de actualización del OCR2A = 6 + (adc_valor2 * 32)/ 255 = valor actualizado del ocr2a_valor
+		PWM_set2(OCR2A_valor);
+		ADMUX = (ADMUX & 0xF0) | 0x05; 
+	}
+	
+	else if (canal == 5)
+	{
+		uint8_t pulso_nuevo = 5 + ((uint16_t)ADC_valor * 20)/255;
+		PWM_set0(pulso_nuevo);
+		ADMUX = (ADMUX & 0xF0) | 0x07; 
+	}
+	
+	ADCSRA |= (1<<ADSC); // volver a hacer lectura de adc
+}
+
+ISR (TIMER0_COMPA_vect)
+{
+	contador_ms ++;
+	if (contador_ms >= periodo_ms)
+	{
+		contador_ms = 0;
+	}
+	
+	if (contador_ms <= pulso_ms)
+	{
+		PORTD |= led_timer0;
+	}
+	else
+	{
+		PORTD &= ~(led_timer0);
 	}
 }
